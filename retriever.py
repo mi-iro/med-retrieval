@@ -1,5 +1,3 @@
-# 此文件内容与您提供的 run_retriever.py 完全相同。
-# 只需将文件名从 run_retriever.py 改为 retriever.py 即可。
 import json
 import os
 import sys
@@ -34,16 +32,17 @@ class Retriever:
     def run(self, source_and_queries, add_query=False):
         args = []
         for source, queries in source_and_queries:
-            if not queries:  # 如果查询列表为空，则跳过
+            if not queries:
                 continue
             assert source in SEARCH_ACTION_DESC
             for q in queries:
                 args.append({"source": source, "query": q, "retrieval_topk": 2*self.topk, "rerank_topk": self.topk})
         
-        if not args: # 如果没有有效的查询，直接返回空结果
-            return []
+        if not args:
+            return [], {}
 
         ##### Run Search #####
+        timing_info = {}
         try_number = 10
         for try_index in range(try_number):
             try:
@@ -53,11 +52,14 @@ class Retriever:
                 encoded_params = urllib.parse.urlencode(params)
                 search_url = f"http://127.0.0.1:10002/?{encoded_params}"
                 print(f"Executing search URL: {search_url}")
-                t1 = time.time()
+                
                 response = session.get(search_url, timeout=300)
-                response.raise_for_status() # 检查请求是否成功
-                search_result = response.json()["success"]
-                print(f'Search execution time: {time.time() - t1:.2f}s')
+                response.raise_for_status()
+                
+                response_json = response.json()
+                search_result = response_json.get("success", [])
+                timing_info = response_json.get("timing", {})
+
                 assert len(search_result) == len(args)
                 break
                 
@@ -67,25 +69,32 @@ class Retriever:
                     raise ValueError(f"Error in Search: {search_url} Error: {e}")
                 time.sleep(6)
         ######################
+        
         for index, ar in enumerate(args):
             if add_query:
                 single_text = f"## source: {ar['source']}; query: {ar['query']}\n"
             else:
                 single_text = f"## source: {ar['source']}\n"
-            if len(search_result[index]) > 0:
-                single_text += "\n".join([f"(Title: {doc['title']}) {doc['para']}" 
-                                for doc in search_result[index]])
+
+            docs_for_query = search_result[index]
+            if len(docs_for_query) > 0:
+                # Attach rerank_score to the original arg dict
+                # This makes it easier to access later
+                ar['results'] = docs_for_query
+                single_text += "\n".join([f"(Title: {doc.get('title', 'N/A')}) {doc.get('para', '')}" 
+                                for doc in docs_for_query])
             else:
+                ar['results'] = []
                 single_text += "There are no searching results."
+
             single_text = single_text.strip()
             ar["docs"] = single_text
 
-        return args
+        return args, timing_info
 
 
 if __name__ == "__main__":
     retriever = Retriever(topk=10)
-    # 示例用法保持不变
     units = [
         ["book", ["fenofibrate and sleep apnoea syndrome"]],
         ["guideline", ["fenofibrate in sleep apnoea syndrome"]],
@@ -94,6 +103,8 @@ if __name__ == "__main__":
         ["graph", ["fenofibrate , role in sleep apnoea"]],
     ]
     print("\n--- Running Standalone Example ---")
-    retrieved_results = retriever.run(units)
+    retrieved_results, timings = retriever.run(units)
     print("\n--- Retrieved Documents ---")
     print(json.dumps(retrieved_results, indent=2))
+    print("\n--- Timing Information ---")
+    print(json.dumps(timings, indent=2))

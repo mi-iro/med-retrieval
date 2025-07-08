@@ -2,6 +2,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import os, sys
 from tqdm import tqdm
+import time
 
 # --- [新] 全局变量和模型设置 ---
 
@@ -109,6 +110,7 @@ def get_reranked_scores(query, articles, batch_size=4): # 建议根据VRAM大小
     Returns:
         list[float]: 与文章列表顺序对应的相关性分数列表。
     """
+    start_time = time.time()
     all_scores = []
     
     # 构建 query-document 对
@@ -119,8 +121,9 @@ def get_reranked_scores(query, articles, batch_size=4): # 建议根据VRAM大小
         batch_pairs = pairs[i:i+batch_size]
         scores = compute_scores(batch_pairs)
         all_scores.extend(scores)
-        
-    return all_scores
+    
+    end_time = time.time()
+    return all_scores, end_time - start_time
     
     
 if __name__ == "__main__":
@@ -142,12 +145,13 @@ if __name__ == "__main__":
     #     "Gravity"
     # ]
 
-    rerank_scores = get_reranked_scores(query, articles)
+    rerank_scores, duration = get_reranked_scores(query, articles)
     
     # 打印结果，并将文章和分数对应起来
     ranked_results = sorted(zip(articles, rerank_scores), key=lambda x: x[1], reverse=True)
     
     print(f"\nQuery: {query}\n")
+    print(f"Reranking took {duration:.4f} seconds.")
     print("--- Reranked Results (Score DESC) ---")
     for doc, score in ranked_results:
         print(f"Score: {score:.4f}\nDocument: {doc[:100]}...\n")

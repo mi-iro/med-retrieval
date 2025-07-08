@@ -34,7 +34,7 @@ def extract_points(points):
 @torch.no_grad()
 def run_qdrant_search(tool, query, retrievel_topk):
     assert tool in SINGLE_TEXT_TOOLS
-    t1 = time.time()
+    start_time = time.time()
     encoded = tokenizer(
         [query], 
         truncation=True, 
@@ -44,10 +44,7 @@ def run_qdrant_search(tool, query, retrievel_topk):
     )
     # encode the queries (use the [CLS] last hidden states as the representations)
     dense_embed = dense_model(**encoded).last_hidden_state[:, 0, :]
-    # sparse_embed = next(sparse_model.embed([query]))
-    # print('t1', time.time() - t1)
 
-    tmp_t = time.time()
     medcpt_search_res = client.query_points(
         collection_name=tool,
         query_filter=None,
@@ -57,22 +54,23 @@ def run_qdrant_search(tool, query, retrievel_topk):
         timeout=300
     ).points
     medcpt_search_res = extract_points(medcpt_search_res)
-    print('qdrant_search:', time.time() - tmp_t)
-    return medcpt_search_res
+    end_time = time.time()
+    return medcpt_search_res, end_time - start_time
 
 @lru_cache(maxsize=100000000)
 def get_text_docs(tool, query, retrieval_topk, rerank_topk):
     # 1. vector search
     if tool in SINGLE_TEXT_TOOLS:
-        all_results = run_qdrant_search(
+        all_results, retrieval_time = run_qdrant_search(
             tool=tool,
             query=query,
             retrievel_topk=retrieval_topk
         )
     else:
         raise NotImplementedError
+        
     # 2. rerank
-    scores = get_reranked_scores(
+    scores, rerank_time = get_reranked_scores(
         query=query,
         articles=[concat(i['title'], i['para']) for i in all_results],
     )
@@ -81,9 +79,12 @@ def get_text_docs(tool, query, retrieval_topk, rerank_topk):
     all_results.sort(key=lambda i: i['rerank_score'], reverse=True)
     all_results = all_results[:rerank_topk]
 
-    return all_results
+    return all_results, retrieval_time, rerank_time
     
 
 if __name__ == "__main__":
-    pprint(get_text_docs(tool="wiki", query="Prunus incisa Thunb. – Fuji cherry Prunus jamasakura Siebold ex Koidz. – Japanese mountain cherry or Japanese hill cherry Prunus leveilleana (Koidz.)", topk=20), width=100)
+    results, retrieval_time, rerank_time = get_text_docs(tool="wiki", query="Prunus incisa Thunb. – Fuji cherry Prunus jamasakura Siebold ex Koidz. – Japanese mountain cherry or Japanese hill cherry Prunus leveilleana (Koidz.)", retrieval_topk=20, rerank_topk=10)
+    pprint(results, width=100)
+    print(f"Retrieval Time: {retrieval_time:.4f}s")
+    print(f"Rerank Time: {rerank_time:.4f}s")
     print("="*89)

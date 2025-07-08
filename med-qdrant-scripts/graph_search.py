@@ -109,15 +109,17 @@ drugbank_search = DrugBank_Search()
 
 @lru_cache(maxsize=100000000)
 def get_graph_docs(term, query, topk):
-    tmp_t = time.time()
+    start_time = time.time()
     cui = umls_search.term_to_cui(term)
     if cui is not None:
         # 1. search
-        definition = umls_search.cui_to_definition(cui) + drugbank_search.name_to_info(term) # type: ignore
+        definition = umls_search.cui_to_definition(cui) or "" + drugbank_search.name_to_info(term) # type: ignore
         rels=umls_search.cui_to_relations(cui)
+        retrieval_time = time.time() - start_time
+
         # 2. rerank
         rel_texts = [f"{rel[0]} {rel[1]} {rel[2]}" for rel in rels]
-        scores = get_reranked_scores(
+        scores, rerank_time = get_reranked_scores(
             query=query,
             articles=rel_texts
         )
@@ -128,11 +130,19 @@ def get_graph_docs(term, query, topk):
         relation = "; ".join([f"({rel[0]}, {rel[1]}, {rel[2]})" for rel in rerank_rels])
         para_text = f"Definition: {definition}\n" if definition else ""
         para_text += f"Relation: {relation}." if relation else ""
-        print("graph_search:", time.time() - tmp_t)
+
         if para_text:
-            return [{"title": "/".join(umls_search.cui_to_names[cui]), "para": para_text, "dataset": "umls"}]
-    return []
+            results = [{"title": "/".join(umls_search.cui_to_names[cui]), "para": para_text, "dataset": "umls"}]
+            # Manually add rerank scores to graph results for consistency
+            if results and zipped_score_rel:
+                results[0]['rerank_score'] = zipped_score_rel[0][0]
+            return results, retrieval_time, rerank_time
+            
+    return [], 0, 0
 
 
 if __name__ == "__main__":
-    print(get_graph_docs(term="Oxamniquine", query="what is the inhibitor of ASPIRIN?", topk=10))
+    results, retrieval_time, rerank_time = get_graph_docs(term="Oxamniquine", query="what is the inhibitor of ASPIRIN?", topk=10)
+    print(results)
+    print(f"Retrieval Time: {retrieval_time:.4f}s")
+    print(f"Rerank Time: {rerank_time:.4f}s")

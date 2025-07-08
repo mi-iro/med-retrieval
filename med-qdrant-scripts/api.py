@@ -17,36 +17,51 @@ def search_startup(args:str):
         args = json.loads(args)
         
         all_results = []
+        total_retrieval_time = 0
+        total_rerank_time = 0
+
         for ar in args:
             tool = ar["source"]
             query = ar["query"]
             retrieval_topk = ar["retrieval_topk"]
             rerank_topk = ar["rerank_topk"]
             assert tool in SINGLE_TEXT_TOOLS + SINGLE_GRAPH_TOOLS, f"{tool} is wrong!"
+            
+            final_result = []
+            retrieval_time = 0
+            rerank_time = 0
 
             if tool in SINGLE_GRAPH_TOOLS:
-                # print(query)
                 if "," not in query:
                     final_result = []
                 else:
                     graph_term, graph_query = query.split(",", maxsplit=1)
                     graph_term, graph_query = graph_term.strip(), graph_query.strip()
-                    final_result = get_graph_docs(
+                    final_result, retrieval_time, rerank_time = get_graph_docs(
                         term=graph_term,
                         query=graph_query,
                         topk=rerank_topk
                     )
             else:
                 query = query.strip()
-                final_result = get_text_docs(
+                final_result, retrieval_time, rerank_time = get_text_docs(
                     tool=tool,
                     query=query,
                     retrieval_topk=retrieval_topk,
                     rerank_topk=rerank_topk
                 )
-            all_results.append(final_result)
 
-        return {"success": all_results}
+            all_results.append(final_result)
+            total_retrieval_time += retrieval_time
+            total_rerank_time += rerank_time
+
+        return {
+            "success": all_results,
+            "timing": {
+                "retrieval_time_seconds": total_retrieval_time,
+                "rerank_time_seconds": total_rerank_time,
+            }
+        }
 
     except Exception as e:
         return repr(e)

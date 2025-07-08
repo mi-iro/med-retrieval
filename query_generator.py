@@ -2,6 +2,7 @@ import json
 import re
 import os
 import sys
+import time
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
@@ -73,7 +74,7 @@ llm = VLLMChatLLM(llm_name="model/Qwen2.5-72B-Instruct-AWQ")
 print("VLLM Model initialized successfully.")
 
 # --- 封装成可被外部调用的函数（已更新） ---
-def generate_queries_for_question(question: str, n_queries: int) -> list:
+def generate_queries_for_question(question: str, n_queries: int) -> tuple[list, float]:
     """
     根据输入的问题，调用大语言模型生成结构化的子查询。
 
@@ -82,8 +83,9 @@ def generate_queries_for_question(question: str, n_queries: int) -> list:
         n_queries: 每个数据源最多生成的查询数量。
 
     Returns:
-        一个列表，包含针对不同数据源的查询指令。
+        一个元组，包含针对不同数据源的查询指令列表和生成查询所花费的时间。
     """
+    start_time = time.time()
     # 使用传入的 n_queries 参数替换模板中的 {N_QUERIES}
     generate_queries_prompt = GENERATE_QUERIES_TEMPLATE.replace("{question}", question).replace("{N_QUERIES}", str(n_queries))
     generate_queries_output = llm.run(generate_queries_prompt)
@@ -117,7 +119,8 @@ def generate_queries_for_question(question: str, n_queries: int) -> list:
 
         source_and_queries.append([source, final_queries])
     
-    return source_and_queries
+    end_time = time.time()
+    return source_and_queries, end_time - start_time
 
 
 # --- 保留原有的 __main__ 块，以便该脚本可以独立运行进行测试 ---
@@ -129,6 +132,7 @@ C. maybe"""
     
     print("\n--- Running Standalone Example ---")
     # 使用默认值进行测试
-    generated_data = generate_queries_for_question(example_question, n_queries=3)
+    generated_data, planning_time = generate_queries_for_question(example_question, n_queries=3)
+    print(f"\nQuery planning took {planning_time:.4f} seconds.")
     print("\n--- Generated Queries ---")
     print(json.dumps(generated_data, indent=2))
