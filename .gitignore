@@ -1,0 +1,7 @@
+__pycache__
+*.log
+run.json
+model/
+.cache
+med-qdrant-chunks/
+med-qdrant/

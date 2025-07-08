@@ -1,0 +1,53 @@
+from pprint import pprint
+import time
+import numpy as np
+import torch
+from tqdm import tqdm
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import os, sys
+sys.path.append(os.path.abspath('./'))
+from utils import get_device_name
+
+RERANKER_PATH = "model/MedCPT-Cross-Encoder"
+device = get_device_name()
+tokenizer = AutoTokenizer.from_pretrained(RERANKER_PATH)
+model = AutoModelForSequenceClassification.from_pretrained(RERANKER_PATH, device_map=device)
+
+@torch.no_grad()
+def get_reranked_scores(query, articles, batch_size=32):
+    pairs = [[query, article] for article in articles]
+    all_logits = []
+    for i in range(0, len(pairs), batch_size):
+        batch_pairs = pairs[i:i+batch_size]
+        encoded = tokenizer(
+            batch_pairs,
+            truncation=True,
+            padding=True,
+            return_tensors="pt",
+            max_length=512,
+        )
+        encoded = {k: v.to(device) for k, v in encoded.items()}
+        logits = model(**encoded).logits.squeeze(dim=1)
+        all_logits.extend([i.item() for i in logits])
+        del logits, encoded
+        # if device == "cuda":
+        #     torch.cuda.empty_cache()
+
+    return all_logits
+    
+    
+if __name__ == "__main__":
+    
+    query = "diabetes treatment"
+
+    # 6 articles to be ranked for the input query
+    articles = [
+        "1",
+        "Diabetes mellitus and its chronic complications. Diabetes mellitus is a major cause of morbidity and mortality, and it is a major risk factor for early onset of coronary heart disease. Complications of diabetes are retinopathy, nephropathy, and peripheral neuropathy. [...]",
+        "Diagnosis and Management of Central Diabetes Insipidus in Adults. Central diabetes insipidus (CDI) is a clinical syndrome which results from loss or impaired function of vasopressinergic neurons in the hypothalamus/posterior pituitary, resulting in impaired synthesis and/or secretion of arginine vasopressin (AVP). [...]",
+        "Adipsic diabetes insipidus. Adipsic diabetes insipidus (ADI) is a rare but devastating disorder of water balance with significant associated morbidity and mortality. Most patients develop the disease as a result of hypothalamic destruction from a variety of underlying etiologies. [...]",
+        "Nephrogenic diabetes insipidus: a comprehensive overview. Nephrogenic diabetes insipidus (NDI) is characterized by the inability to concentrate urine that results in polyuria and polydipsia, despite having normal or elevated plasma concentrations of arginine vasopressin (AVP). [...]",
+        "Impact of Salt Intake on the Pathogenesis and Treatment of Hypertension. Excessive dietary salt (sodium chloride) intake is associated with an increased risk for hypertension, which in turn is especially a major risk factor for stroke and other cardiovascular pathologies, but also kidney diseases. Besides, high salt intake or preference for salty food is discussed to be positive associated with stomach cancer, and according to recent studies probably also obesity risk. [...]"
+    ] * 1
+
+    print(get_reranked_scores(query, articles))

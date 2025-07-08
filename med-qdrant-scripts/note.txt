@@ -1,0 +1,21 @@
+# 启动服务
+
+同时开启以下两个服务：
+```bash
+cd med-qdrant
+chmod 777 ./qdrant-1.13.6
+./qdrant-1.13.6 --config-path ./config.yaml # 这一步会占用400G内存，耗时约半小时启动
+```
+```bash
+cd med-qdrant-scripts
+# 里面有些路径是这么指的：../med-qdrant/ 可能需要调整
+# 这两个服务需要在一个host上启动
+# 这个文件夹里还需要包含以下三个模型，我就不上传了：model/MedCPT-Article-Encoder  model/MedCPT-Cross-Encoder  model/MedCPT-Query-Encoder
+
+CUDA_VISIBLE_DEVICES=0 api.py 10002
+```
+
+# 运行检索
+```bash
+python med-qdrant-scripts/run_retriever.py
+```
