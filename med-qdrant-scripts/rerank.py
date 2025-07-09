@@ -1,137 +1,172 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import os, sys
+from transformers import AutoTokenizer
+import os
+import sys
 from tqdm import tqdm
 import time
+import math
 
-# --- [新] 全局变量和模型设置 ---
+# --- [New] vLLM Imports ---
+from vllm import LLM, SamplingParams
+from vllm.distributed.parallel_state import destroy_model_parallel
+from vllm.inputs.data import TokensPrompt
 
-# 1. 更新模型路径
-RERANKER_PATH = "/mnt/public/lianghao/wzr/med_reseacher/med-retrieval/model/Qwen3-Reranker-4B"
+# --- [New] Global Variables and vLLM Model Setup ---
 
-# 2. 设备和性能配置
-# 自动检测设备 (CUDA or CPU)
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    print(f"Using device: {torch.cuda.get_device_name(0)}")
-else:
-    device = torch.device("cpu")
-    print("Using device: CPU")
+# 1. Model Path
+RERANKER_PATH = "/mnt/public/lianghao/wzr/med_reseacher/med-retrieval/model/Qwen3-Reranker-0.6B"
 
-# 加载 Tokenizer
-# 对于 Causal LM，填充在左侧是标准做法
-tokenizer = AutoTokenizer.from_pretrained(RERANKER_PATH, padding_side='left')
+# 2. vLLM and Tokenizer Initialization
+print("Initializing vLLM model and tokenizer...")
+# Detect number of available GPUs
+number_of_gpu = torch.cuda.device_count()
+if number_of_gpu == 0:
+    print("No GPU detected. vLLM requires a GPU.", file=sys.stderr)
+    sys.exit(1)
 
-# 加载模型并应用性能优化
-# 使用 bfloat16/float16 和 flash_attention_2 以获得最佳性能
-model = AutoModelForCausalLM.from_pretrained(
-    RERANKER_PATH,
-    torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-    attn_implementation="flash_attention_2"
-).to(device).eval()
+# Load the tokenizer
+tokenizer = AutoTokenizer.from_pretrained(RERANKER_PATH)
 
-# 3. 定义模型所需的特殊 Token 和模板
+# Load the model with vLLM
+# enable_prefix_caching=True is beneficial for reranking where the system prompt/instruction is shared
+model = LLM(
+    model=RERANKER_PATH,
+    tensor_parallel_size=number_of_gpu,
+    max_model_len=1024*2,
+    enable_prefix_caching=True,
+    gpu_memory_utilization=0.98,
+    max_num_seqs=1024,
+)
+print(f"vLLM model loaded on {number_of_gpu} GPU(s).")
+
+# 3. Define Model-specific Tokens and Parameters
+# Get token IDs for "yes" and "no"
 token_false_id = tokenizer.convert_tokens_to_ids("no")
 token_true_id = tokenizer.convert_tokens_to_ids("yes")
-max_length = 1024*32 # Qwen3 模型支持更长的序列
 
-# 这是 Qwen3 Reranker 的标准模板
-prefix_str = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
-suffix_str = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-prefix_tokens = tokenizer.encode(prefix_str, add_special_tokens=False)
-suffix_tokens = tokenizer.encode(suffix_str, add_special_tokens=False)
+# Define the suffix that prompts the model to think and respond
+# This is applied after the user message via the chat template's generation prompt
+suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+suffix_tokens = tokenizer.encode(suffix, add_special_tokens=False)
+max_length = 1024*2 - len(suffix_tokens) # Reserve space for the suffix
 
-# 默认指令任务
+# Define sampling parameters for vLLM
+# We want to get the log probabilities for "yes" and "no"
+sampling_params = SamplingParams(
+    temperature=0,
+    max_tokens=1,
+    logprobs=2, # Request logprobs for top 2 tokens
+    allowed_token_ids=[token_true_id, token_false_id], # Constrain the output
+)
+
+# Default instruction task
 DEFAULT_INSTRUCTION = 'Given a web search query, retrieve relevant passages that answer the query'
 
-# --- [新] 辅助函数 ---
+# --- [New] vLLM Helper Functions ---
 
-def format_instruction(query, doc, instruction=DEFAULT_INSTRUCTION):
+def format_and_tokenize_inputs(pairs, instruction):
     """
-    根据Qwen3-Reranker的格式要求构建输入字符串。
+    Formats query-document pairs using the Qwen chat template and tokenizes them.
     """
-    return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}"
-
-@torch.no_grad()
-def compute_scores(batch_pairs):
-    """
-    处理一批(query, document)对，并计算它们的相关性分数。
-    """
-    # 1. 准备模型输入
-    inputs = tokenizer(
-        batch_pairs, 
-        padding=False,  # 先不填充，手动处理
-        truncation='longest_first',
-        return_attention_mask=False,
-        max_length=max_length - len(prefix_tokens) - len(suffix_tokens)
+    # Create the structured messages for the chat template
+    messages = [
+        [
+            {"role": "system", "content": "Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\"."},
+            {"role": "user", "content": f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}"}
+        ]
+        for query, doc in pairs
+    ]
+    
+    # Apply the chat template and tokenize
+    # We don't add a generation prompt here as we will manually add our specific suffix tokens
+    tokenized_inputs = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=False,
     )
 
-    # 2. 添加特殊的前后缀 Token
-    for i in range(len(inputs['input_ids'])):
-        inputs['input_ids'][i] = prefix_tokens + inputs['input_ids'][i] + suffix_tokens
+    # Truncate if necessary and append the required suffix tokens
+    tokenized_inputs = [ele[:max_length] + suffix_tokens for ele in tokenized_inputs]
     
-    # 3. 动态填充并转换为Tensor
-    inputs = tokenizer.pad(inputs, padding=True, return_tensors="pt", max_length=max_length)
-    
-    # 4. 将数据移至目标设备
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-
-    # 5. 模型推理和分数计算
-    logits = model(**inputs).logits
-    
-    # 我们只关心最后一个 token 的 logits，因为它代表了模型的预测
-    last_token_logits = logits[:, -1, :]
-    
-    # 提取 "yes" 和 "no" 对应的 logits
-    true_scores = last_token_logits[:, token_true_id]
-    false_scores = last_token_logits[:, token_false_id]
-    
-    # 使用 LogSoftmax 将 logits 转换为概率
-    scores_stack = torch.stack([false_scores, true_scores], dim=1)
-    scores_log_softmax = torch.nn.functional.log_softmax(scores_stack, dim=1)
-    
-    # 取出 "yes" 的概率作为最终分数
-    final_scores = scores_log_softmax[:, 1].exp().tolist()
-    
-    return final_scores
+    # Wrap in vLLM's TokensPrompt object
+    prompts = [TokensPrompt(prompt_token_ids=ele) for ele in tokenized_inputs]
+    return prompts
 
 
-# --- [适配后] 主函数 ---
-
-def get_reranked_scores(query, articles, batch_size=4): # 建议根据VRAM大小调整batch_size
+@torch.no_grad()
+def compute_scores_vllm(batch_prompts):
     """
-    为给定的查询（query）和文章列表（articles）计算重排分数。
+    Processes a batch of tokenized prompts with vLLM and computes relevance scores.
+    """
+    # 1. Run model inference using vLLM's generate method
+    outputs = model.generate(batch_prompts, sampling_params, use_tqdm=False)
+    
+    all_scores = []
+    
+    # 2. Process outputs to calculate scores
+    for output in outputs:
+        # The logprobs for the single generated token are in the last step
+        final_logprobs = output.outputs[0].logprobs[-1]
+        
+        # Extract the log probability for "yes" and "no" tokens
+        # As requested, access the .logprob attribute from the Logprob object
+        true_logit = final_logprobs.get(token_true_id)
+        false_logit = final_logprobs.get(token_false_id)
+
+        # Handle cases where a token might not be in the top-k logprobs
+        true_logprob = true_logit.logprob if true_logit is not None else -100.0
+        false_logprob = false_logit.logprob if false_logit is not None else -100.0
+
+        # 3. Convert log probabilities to probabilities and normalize
+        true_score = math.exp(true_logprob)
+        false_score = math.exp(false_logprob)
+        
+        final_score = true_score / (true_score + false_score)
+        all_scores.append(final_score)
+        
+    return all_scores
+
+
+# --- [Adapted] Main Function ---
+
+def get_reranked_scores(query, articles, batch_size=2048): # vLLM can handle much larger batch sizes
+    """
+    Computes reranked scores for a query and a list of articles using vLLM.
     
     Args:
-        query (str): 单个查询字符串。
-        articles (list[str]): 需要排序的文档字符串列表。
-        batch_size (int): 处理时的批量大小。
+        query (str): A single query string.
+        articles (list[str]): A list of document strings to be ranked.
+        batch_size (int): The batch size for processing.
 
     Returns:
-        list[float]: 与文章列表顺序对应的相关性分数列表。
+        tuple[list[float], float]: A tuple containing the list of relevance scores 
+                                   and the total time taken.
     """
     start_time = time.time()
     all_scores = []
     
-    # 构建 query-document 对
-    pairs = [format_instruction(query, doc) for doc in articles]
+    # Create (query, document) pairs
+    pairs = [(query, doc) for doc in articles]
 
-    # 按批次处理
-    for i in tqdm(range(0, len(pairs), batch_size), desc="Reranking"):
-        batch_pairs = pairs[i:i+batch_size]
-        scores = compute_scores(batch_pairs)
+    # Process in batches
+    for i in tqdm(range(0, len(pairs), batch_size), desc="Reranking with vLLM"):
+        batch_pairs = pairs[i:i + batch_size]
+        
+        # Format and tokenize the batch
+        prompts = format_and_tokenize_inputs(batch_pairs, DEFAULT_INSTRUCTION)
+        
+        # Compute scores for the batch
+        scores = compute_scores_vllm(prompts)
         all_scores.extend(scores)
     
     end_time = time.time()
     return all_scores, end_time - start_time
-    
-    
+
+
 if __name__ == "__main__":
     
     query = "diabetes treatment"
-    # query = "What is the capital of China?"
-
-    # articles to be ranked for the input query
+    
     articles = [
         "Metformin is a first-line medication for the treatment of type 2 diabetes.",
         "Diabetes mellitus and its chronic complications. Diabetes mellitus is a major cause of morbidity and mortality, and it is a major risk factor for early onset of coronary heart disease. Complications of diabetes are retinopathy, nephropathy, and peripheral neuropathy.",
@@ -140,18 +175,20 @@ if __name__ == "__main__":
         "Nephrogenic diabetes insipidus: a comprehensive overview. Nephrogenic diabetes insipidus (NDI) is characterized by the inability to concentrate urine that results in polyuria and polydipsia...",
         "Impact of Salt Intake on the Pathogenesis and Treatment of Hypertension. Excessive dietary salt (sodium chloride) intake is associated with an increased risk for hypertension..."
     ]
-    # articles = [
-    #     "The capital of China is Beijing.",
-    #     "Gravity"
-    # ]
 
+    # Get scores using the new vLLM-accelerated function
     rerank_scores, duration = get_reranked_scores(query, articles)
     
-    # 打印结果，并将文章和分数对应起来
+    # Combine articles with their scores
     ranked_results = sorted(zip(articles, rerank_scores), key=lambda x: x[1], reverse=True)
     
     print(f"\nQuery: {query}\n")
-    print(f"Reranking took {duration:.4f} seconds.")
+    print(f"Reranking with vLLM took {duration:.4f} seconds.")
     print("--- Reranked Results (Score DESC) ---")
     for doc, score in ranked_results:
         print(f"Score: {score:.4f}\nDocument: {doc[:100]}...\n")
+
+    # Clean up vLLM model parallel resources
+    print("Destroying model parallel group...")
+    destroy_model_parallel()
+    print("Done.")

@@ -3,10 +3,17 @@ import re
 import os
 import sys
 import time
+import torch
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
 sys.path.append(os.path.abspath("./"))
+
+# Detect number of available GPUs
+number_of_gpu = torch.cuda.device_count()
+if number_of_gpu == 0:
+    print("No GPU detected. vLLM requires a GPU.", file=sys.stderr)
+    sys.exit(1)
 
 # VLLMChatLLM 类定义保持不变
 class VLLMChatLLM():
@@ -16,7 +23,9 @@ class VLLMChatLLM():
             model=llm_name,
             enable_prefix_caching=True,
             max_model_len=32000,
-            max_num_seqs=1
+            max_num_seqs=1,
+            gpu_memory_utilization=0.98,
+            tensor_parallel_size=number_of_gpu,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
