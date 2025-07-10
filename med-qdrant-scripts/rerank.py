@@ -6,6 +6,8 @@ from tqdm import tqdm
 import time
 import math
 
+import threading # <--- 核心改动：导入threading模块
+
 # --- [New] vLLM Imports ---
 from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
@@ -62,6 +64,9 @@ sampling_params = SamplingParams(
 # Default instruction task
 DEFAULT_INSTRUCTION = 'Given a web search query, retrieve relevant passages that answer the query'
 
+# --- 核心改动：为vLLM模型创建一个全局线程锁 ---
+vllm_lock = threading.Lock()
+
 # --- [New] vLLM Helper Functions ---
 
 def format_and_tokenize_inputs(pairs, instruction):
@@ -95,12 +100,20 @@ def format_and_tokenize_inputs(pairs, instruction):
 
 @torch.no_grad()
 def compute_scores_vllm(batch_prompts):
+    # """
+    # Processes a batch of tokenized prompts with vLLM and computes relevance scores.
+    # """
+    # # 1. Run model inference using vLLM's generate method
+    # outputs = model.generate(batch_prompts, sampling_params, use_tqdm=False)
     """
-    Processes a batch of tokenized prompts with vLLM and computes relevance scores.
+    使用vLLM处理一批经过词法分析的提示并计算相关性分数。
+    此函数现在是线程安全的。
     """
-    # 1. Run model inference using vLLM's generate method
-    outputs = model.generate(batch_prompts, sampling_params, use_tqdm=False)
-    
+    # 核心改动：在调用模型生成之前获取锁
+    with vllm_lock:
+        outputs = model.generate(batch_prompts, sampling_params, use_tqdm=False)
+    # 锁在此处自动释放
+
     all_scores = []
     
     # 2. Process outputs to calculate scores
