@@ -14,6 +14,7 @@ SEARCH_ACTION_DESC = {
     "research":     "The API provides access to advanced biomedical research, facilitating access to specialized knowledge and resources.",
     "wiki":         "The API provides access to general knowledge across a wide range of topics.",
     "graph":        "The API provides a structured knowledge graph that connects medical definitions and related terms.",
+    "adaptive_text":"The API provides access to all text-based sources (book, guideline, research, wiki) with a unified ranking.",
 }
 SEARCH_ACTION_PARAM = {
     "book":         r"{search_query0} ; {search_query1} ; ... (Use ; to separate the queries, 0 to 3 queries)",
@@ -21,6 +22,7 @@ SEARCH_ACTION_PARAM = {
     "research":     r"{search_query0} ; {search_query1} ; ... (Use ; to separate the queries, 0 to 3 queries)",
     "wiki":         r"{search_query0} ; {search_query1} ; ... (Use ; to separate the queries, 0 to 3 queries)",
     "graph":        r"{medical_term0} , {query_for_term0} ; {medical_term1} , {query_for_term1} ; ... (Use ; to separate the queries, 0 to 3 queries. Each query should use , to separate the {medical_term} and {query_for_term})",
+    "adaptive_text":r"{search_query}"
 }
 
 session = requests.Session()
@@ -29,14 +31,21 @@ class Retriever:
     def __init__(self, topk):
         self.topk = topk
 
-    def run(self, source_and_queries, add_query=False):
+    def run(self, source_and_queries, add_query=False, adaptive=False):
         args = []
-        for source, queries in source_and_queries:
-            if not queries:
-                continue
-            assert source in SEARCH_ACTION_DESC
-            for q in queries:
-                args.append({"source": source, "query": q, "retrieval_topk": 2*self.topk, "rerank_topk": self.topk})
+        if adaptive:
+            # 自适应模式：使用第一个查询作为统一查询
+            # source_and_queries 格式为: [["adaptive_text", ["your query"]]]
+            main_query = source_and_queries[0][1][0]
+            args.append({"source": "adaptive_text", "query": main_query, "retrieval_topk": 2 * self.topk, "rerank_topk": self.topk})
+        else:
+            # 常规模式
+            for source, queries in source_and_queries:
+                if not queries:
+                    continue
+                assert source in SEARCH_ACTION_DESC
+                for q in queries:
+                    args.append({"source": source, "query": q, "retrieval_topk": 2*self.topk, "rerank_topk": self.topk})
         
         if not args:
             return [], {}
@@ -95,16 +104,29 @@ class Retriever:
 
 if __name__ == "__main__":
     retriever = Retriever(topk=10)
-    units = [
+    
+    # --- 原有测试 ---
+    units_standard = [
         ["book", ["fenofibrate and sleep apnoea syndrome"]],
         ["guideline", ["fenofibrate in sleep apnoea syndrome"]],
         ["research", ["efficacy of fenofibrate in treating sleep apnoea"]],
         ["wiki", ["fenofibrate and sleep apnoea"]],
         ["graph", ["fenofibrate , role in sleep apnoea"]],
     ]
-    print("\n--- Running Standalone Example ---")
-    retrieved_results, timings = retriever.run(units)
-    print("\n--- Retrieved Documents ---")
-    print(json.dumps(retrieved_results, indent=2))
-    print("\n--- Timing Information ---")
-    print(json.dumps(timings, indent=2))
+    print("\n--- Running Standalone Example (Standard Mode) ---")
+    retrieved_results_std, timings_std = retriever.run(units_standard)
+    print("\n--- Retrieved Documents (Standard) ---")
+    print(json.dumps(retrieved_results_std, indent=2))
+    print("\n--- Timing Information (Standard) ---")
+    print(json.dumps(timings_std, indent=2))
+    
+    # --- 新增自适应模式测试 ---
+    units_adaptive = [
+        ["adaptive_text", ["fenofibrate and sleep apnoea syndrome"]]
+    ]
+    print("\n--- Running Standalone Example (Adaptive Mode) ---")
+    retrieved_results_adapt, timings_adapt = retriever.run(units_adaptive, adaptive=True)
+    print("\n--- Retrieved Documents (Adaptive) ---")
+    print(json.dumps(retrieved_results_adapt, indent=2))
+    print("\n--- Timing Information (Adaptive) ---")
+    print(json.dumps(timings_adapt, indent=2))

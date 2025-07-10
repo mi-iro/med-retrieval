@@ -14,7 +14,7 @@ from vllm.inputs.data import TokensPrompt
 # --- [New] Global Variables and vLLM Model Setup ---
 
 # 1. Model Path
-RERANKER_PATH = "/mnt/public/lianghao/wzr/med_reseacher/med-retrieval/model/Qwen3-Reranker-0.6B"
+RERANKER_PATH = "/mnt/public/lianghao/wzr/med_reseacher/med-retrieval/model/Qwen3-Reranker-4B"
 
 # 2. vLLM and Tokenizer Initialization
 print("Initializing vLLM model and tokenizer...")
