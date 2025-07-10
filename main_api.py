@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 import json
 import numpy as np
+import sys
 
 # 从我们准备好的模块中导入核心功能
 from query_generator import generate_queries_for_question
@@ -114,4 +115,6 @@ def read_root():
 
 # --- 运行服务器 ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    assert len(sys.argv) > 1, "PORT?"
+    port = int(sys.argv[1])
+    uvicorn.run(app, host="0.0.0.0", port=port)
