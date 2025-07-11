@@ -178,6 +178,10 @@ async def process_batch_query_endpoint(request: BatchQueryRequest):
         total_retrieval_time = search_timing.get("retrieval_time_seconds", 0)
         total_rerank_time = search_timing.get("rerank_time_seconds", 0)
 
+        # 【修改】为避免报告误导性的总时间，计算每个问题的平均处理时间
+        avg_retrieval_time = total_retrieval_time / questions_count if questions_count > 0 else 0
+        avg_rerank_time = total_rerank_time / questions_count if questions_count > 0 else 0
+
         for i, q in enumerate(request.question):
             doc_group = retrieved_docs[i]
             all_scores = []
@@ -189,7 +193,7 @@ async def process_batch_query_endpoint(request: BatchQueryRequest):
             avg_rerank_score = np.mean(all_scores) if all_scores else None
             
             # 因为时间是整个批次的总和，这里将其分配到每个项目以符合单一响应的格式
-            # 注意: 这只是为了格式统一，实际时间是批处理的总时间
+            # 注意: 这只是为了格式统一，实际时间是批处理的总时间平均
             single_item_response = {
                 "parameters_used": {
                     "topk": request.topk,
@@ -199,8 +203,8 @@ async def process_batch_query_endpoint(request: BatchQueryRequest):
                 },
                 "performance_metrics": {
                     "query_planning_seconds": 0.0,
-                    "retrieval_seconds": total_retrieval_time,
-                    "rerank_seconds": total_rerank_time,
+                    "retrieval_seconds": avg_retrieval_time,
+                    "rerank_seconds": avg_rerank_time,
                     "average_rerank_score": avg_rerank_score
                 },
                 # 生成的查询就是自适应查询本身
