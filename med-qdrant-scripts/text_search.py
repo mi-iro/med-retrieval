@@ -35,23 +35,17 @@ def extract_points(points):
 
 
 @torch.no_grad()
-def run_qdrant_search(tool, query, retrievel_topk):
+def run_qdrant_search_with_embedding(tool, dense_embed, retrievel_topk):
+    """
+    [新增] 使用预先计算好的查询嵌入执行Qdrant搜索。
+    """
     assert tool in SINGLE_TEXT_TOOLS
     start_time = time.time()
-    encoded = tokenizer(
-        [query], 
-        truncation=True, 
-        padding=True, 
-        return_tensors='pt', 
-        max_length=64, # https://github.com/ncbi/MedCPT/issues/3#issuecomment-1874776320
-    )
-    # encode the queries (use the [CLS] last hidden states as the representations)
-    dense_embed = dense_model(**encoded).last_hidden_state[:, 0, :]
-
+    
     medcpt_search_res = client.query_points(
         collection_name=tool,
         query_filter=None,
-        query=dense_embed[0].tolist(),
+        query=dense_embed.tolist(),
         using="medcpt-article",
         limit=retrievel_topk,
         timeout=300
@@ -60,18 +54,59 @@ def run_qdrant_search(tool, query, retrievel_topk):
     end_time = time.time()
     return medcpt_search_res, end_time - start_time
 
+
+@torch.no_grad()
+def run_qdrant_search(tool, query, retrievel_topk):
+    """
+    [重构] 原始的搜索函数，现在内部处理查询嵌入并调用新的核心搜索函数。
+    """
+    assert tool in SINGLE_TEXT_TOOLS
+    
+    # --- 查询嵌入 ---
+    encoded = tokenizer(
+        [query], 
+        truncation=True, 
+        padding=True, 
+        return_tensors='pt', 
+        max_length=64, # https://github.com/ncbi/MedCPT/issues/3#issuecomment-1874776320
+    )
+    dense_embed = dense_model(**encoded).last_hidden_state[:, 0, :]
+    # ---------------
+
+    # 调用使用嵌入向量的新函数
+    return run_qdrant_search_with_embedding(
+        tool=tool,
+        dense_embed=dense_embed[0],
+        retrievel_topk=retrievel_topk
+    )
+
+
 @lru_cache(maxsize=100000000)
 def get_text_docs_adaptive(query, retrieval_topk, rerank_topk):
     """
-    自适应检索模式：在所有文本源中搜索，然后统一重排。
+    [优化] 自适应检索模式：在所有文本源中搜索，然后统一重排。
+    查询嵌入只执行一次。
     """
-    # 1. 在所有文本源中并行进行向量检索
     total_retrieval_time = 0
     all_retrieved_docs = []
+
+    # --- 优化点：在此处仅执行一次查询嵌入 ---
+    with torch.no_grad():
+        encoded = tokenizer(
+            [query],
+            truncation=True,
+            padding=True,
+            return_tensors='pt',
+            max_length=64,
+        )
+        dense_embed = dense_model(**encoded).last_hidden_state[:, 0, :]
+    # -----------------------------------------
+
+    # 1. 在所有文本源中并行进行向量检索，复用同一个嵌入向量
     for tool in SINGLE_TEXT_TOOLS:
-        docs, retrieval_time = run_qdrant_search(
+        docs, retrieval_time = run_qdrant_search_with_embedding(
             tool=tool,
-            query=query,
+            dense_embed=dense_embed[0], # 复用嵌入
             retrievel_topk=retrieval_topk
         )
         all_retrieved_docs.extend(docs)
@@ -102,6 +137,7 @@ def get_text_docs_adaptive(query, retrieval_topk, rerank_topk):
 def get_text_docs(tool, query, retrieval_topk, rerank_topk):
     # 1. vector search
     if tool in SINGLE_TEXT_TOOLS:
+        # 此处调用未改变，保持了接口的向后兼容性
         all_results, retrieval_time = run_qdrant_search(
             tool=tool,
             query=query,
