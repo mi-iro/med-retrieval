@@ -14,7 +14,7 @@ app = FastAPI()
 
 # 创建一个全局的线程池执行器
 # 可以根据服务器的核心数和I/O能力调整线程数
-executor = ThreadPoolExecutor(max_workers=32)
+executor = ThreadPoolExecutor(max_workers=64)
 
 def process_single_request(ar):
     """
