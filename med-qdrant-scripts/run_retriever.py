@@ -26,15 +26,16 @@ SEARCH_ACTION_PARAM = {
 session = requests.Session()
 
 class Retriever:
-    def __init__(self, topk):
+    def __init__(self, topk, rate=2):
         self.topk = topk
+        self.rate = rate
 
     def run(self, source_and_queries, add_query=False):
         args = []
         for source, queries in source_and_queries:
             assert source in SEARCH_ACTION_DESC
             for q in queries:
-                args.append({"source": source, "query": q, "retrieval_topk": 2*self.topk, "rerank_topk": self.topk})
+                args.append({"source": source, "query": q, "retrieval_topk": self.rate * self.topk, "rerank_topk": self.topk})
         ##### Run Search #####
         try_number = 10
         for try_index in range(try_number):
@@ -75,7 +76,7 @@ class Retriever:
 
 
 if __name__ == "__main__":
-    retriever = Retriever(topk=10)
+    retriever = Retriever(topk=10, rate=2)
     units = [
     [
         "book",

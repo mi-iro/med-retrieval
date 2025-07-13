@@ -28,8 +28,9 @@ SEARCH_ACTION_PARAM = {
 session = requests.Session()
 
 class Retriever:
-    def __init__(self, topk):
+    def __init__(self, topk, rate=2):
         self.topk = topk
+        self.rate = rate
 
     def run(self, source_and_queries, add_query=False, adaptive=False):
         args = []
@@ -37,7 +38,7 @@ class Retriever:
             # 自适应模式：使用第一个查询作为统一查询
             # source_and_queries 格式为: [["adaptive_text", ["your query"]]]
             main_query = source_and_queries[0][1][0]
-            args.append({"source": "adaptive_text", "query": main_query, "retrieval_topk": 2 * self.topk, "rerank_topk": self.topk})
+            args.append({"source": "adaptive_text", "query": main_query, "retrieval_topk": self.rate * self.topk, "rerank_topk": self.topk})
         else:
             # 常规模式
             for source, queries in source_and_queries:
@@ -45,7 +46,7 @@ class Retriever:
                     continue
                 assert source in SEARCH_ACTION_DESC
                 for q in queries:
-                    args.append({"source": source, "query": q, "retrieval_topk": 2*self.topk, "rerank_topk": self.topk})
+                    args.append({"source": source, "query": q, "retrieval_topk": self.rate * self.topk, "rerank_topk": self.topk})
         
         if not args:
             return [], {}
@@ -103,7 +104,7 @@ class Retriever:
 
 
 if __name__ == "__main__":
-    retriever = Retriever(topk=10)
+    retriever = Retriever(topk=10, rate=2)
     
     # --- 原有测试 ---
     units_standard = [

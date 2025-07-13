@@ -8,7 +8,7 @@ import sys
 import time
 
 # 从我们准备好的模块中导入核心功能
-# from query_generator import generate_queries_for_question
+from query_generator import generate_queries_for_question
 from retriever import Retriever
 
 # --- FastAPI应用初始化 ---
@@ -43,6 +43,11 @@ class QueryRequest(BaseModel):
         default=False,
         description="Enable adaptive retrieval mode, which uses the original question to search across all text sources and reranks them together. If true, 'n_queries' is ignored."
     )
+    rate: Optional[int] = Field(
+        default=2,
+        gt=0,
+        description="The ratio of retrieval_topk to rerank_topk."
+    )
 
 class PerformanceMetrics(BaseModel):
     query_planning_seconds: float = Field(..., description="Time taken for the query generation phase.")
@@ -68,6 +73,11 @@ class BatchQueryRequest(BaseModel):
         gt=0,
         le=50,
         description="The number of documents to retrieve for each query."
+    )
+    rate: Optional[int] = Field(
+        default=2,
+        gt=0,
+        description="The ratio of retrieval_topk to rerank_topk."
     )
 
 class BatchApiResponse(BaseModel):
@@ -105,7 +115,7 @@ async def process_query_endpoint(request: QueryRequest):
             print(json.dumps(source_and_queries, indent=2))
 
         print(f"Retrieving top {request.topk} documents...")
-        retriever_instance = Retriever(topk=request.topk)
+        retriever_instance = Retriever(topk=request.topk, rate=request.rate)
         retrieved_docs, search_timing = retriever_instance.run(source_and_queries, adaptive=request.adaptive)
         print("Documents retrieved successfully.")
 
@@ -123,7 +133,8 @@ async def process_query_endpoint(request: QueryRequest):
                 "topk": request.topk,
                 "n_queries": request.n_queries,
                 "adaptive": request.adaptive,
-                "question": request.question
+                "question": request.question,
+                "rate": request.rate,
             },
             "performance_metrics": {
                 "query_planning_seconds": planning_time,
@@ -158,7 +169,7 @@ async def process_batch_query_endpoint(request: BatchQueryRequest):
 
         # 2. 创建Retriever实例并调用，获取文档和计时信息
         print(f"Retrieving top {request.topk} documents for each question...")
-        retriever_instance = Retriever(topk=request.topk)
+        retriever_instance = Retriever(topk=request.topk, rate=request.rate)
         # 调用run时 adaptive=False, 复用其内部能处理多个query的逻辑分支
         retrieved_docs, search_timing = retriever_instance.run(source_and_queries, adaptive=False)
         print("Batch documents retrieved successfully.")
@@ -199,7 +210,8 @@ async def process_batch_query_endpoint(request: BatchQueryRequest):
                     "topk": request.topk,
                     "n_queries": "N/A (Batch Adaptive Mode)",
                     "adaptive": True,
-                    "question": q
+                    "question": q,
+                    "rate": request.rate,
                 },
                 "performance_metrics": {
                     "query_planning_seconds": 0.0,
