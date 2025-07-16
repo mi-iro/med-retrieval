@@ -36,7 +36,7 @@ model = LLM(
     tensor_parallel_size=number_of_gpu,
     max_model_len=1024*2,
     enable_prefix_caching=True,
-    gpu_memory_utilization=0.98,
+    gpu_memory_utilization=0.93,
     max_num_seqs=1024,
 )
 print(f"vLLM model loaded on {number_of_gpu} GPU(s).")
