@@ -4,5 +4,8 @@ __pycache__
 run.json
 model/
 .cache
-med-qdrant-chunks/
 med-qdrant/
+med-qdrant-qwen/
+med-qdrant-chunks-qwen/
+retrieval_results/*
+!retrieval_results/.gitkeep

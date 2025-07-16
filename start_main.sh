@@ -1,2 +1,2 @@
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=
 nohup python main_api.py 8888 > main.log &

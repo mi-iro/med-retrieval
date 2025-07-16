@@ -42,7 +42,7 @@ def main():
     args = parser.parse_args()
 
     # Collections to be quantized, identified from text_search.py
-    collections_to_quantize = ["guideline", "research", "book", "wiki"]
+    collections_to_quantize = ["guideline_qwen", "research_qwen", "book_qwen", "wiki_qwen"]
 
     try:
         # Initialize the Qdrant client

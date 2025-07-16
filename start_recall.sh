@@ -1,4 +1,4 @@
-cd med-qdrant
+cd med-qdrant-qwen
 chmod 777 ./qdrant-1.13.6
-nohup ./qdrant-1.13.6 --config-path ./config.yaml > ../recall.log &
+nohup ./qdrant-1.13.6 --config-path ./config.yaml > ../recall-qwen.log &
 cd ..

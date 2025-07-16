@@ -8,7 +8,7 @@ import sys
 import time
 
 # 从我们准备好的模块中导入核心功能
-from query_generator import generate_queries_for_question
+# from query_generator import generate_queries_for_question
 from retriever import Retriever
 
 # --- FastAPI应用初始化 ---
